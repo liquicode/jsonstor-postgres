@@ -961,6 +961,27 @@ module.exports = {
 		//=====================================================================
 
 
+		// ***What this storage is actually talking to.*** Two columns rather than one, because
+		// `version()` answers a whole sentence - `16.15 (Debian 16.15-1.pgdg13+2)` - which is
+		// worth keeping verbatim while `server_version` is the part that can be compared.
+		Storage.StorageInfo = async function ( Options )
+		{
+			let answer = await SQL_Passthrough(
+				`SELECT current_setting('server_version') AS server_version, version() AS banner` );
+			let row = answer.results[ 0 ] || {};
+			// ***`server_version` is not only the version on a packaged build.*** Debian's
+			// answers `14.24 (Debian 14.24-1.pgdg13+2)`, so the version is the first token and
+			// the rest belongs with the banner, where the whole sentence is kept anyway.
+			let reported = ( row.server_version || '' ).split( ' ' )[ 0 ];
+			return jsonstor.BuildStorageInfo( Storage, {
+				Product: 'PostgreSql',
+				Version: reported,
+				Banner: row.banner || '',
+				Endpoint: `${Storage.Settings.Server}:${Storage.Settings.Port}`,
+			} );
+		};
+
+
 		Storage.DropStorage = async function ( Options )
 		{
 			await SQL_Execute( `DROP TABLE IF EXISTS ${table_reference()}` );
