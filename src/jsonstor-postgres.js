@@ -36,6 +36,17 @@ module.exports = {
 		// column the table *is* the document, and a field with no column is refused by name.
 		if ( jsongin.ShortType( Settings.PayloadColumn ) !== 's' ) { Settings.PayloadColumn = ''; }
 		if ( jsongin.ShortType( Settings.PayloadSync ) !== 'b' ) { Settings.PayloadSync = false; }
+		// ***Whether a field with no column of its own may be answered out of the payload.***
+		//
+		// Off by default, and the default is not timidity. The clause casts the payload column to
+		// jsonb, and ***a value which is not JSON makes the statement throw*** - measured,
+		// `invalid input syntax for type json` - so a foreign table whose payload column holds
+		// ordinary text would go from working to erroring. Only a caller who knows what is in
+		// that column can say.
+		//
+		// It also turns on the GIN index below, because the pushdown without one is a sequential
+		// scan with a cast on every row, which is slower than not rendering at all.
+		if ( jsongin.ShortType( Settings.PayloadPushdown ) !== 'b' ) { Settings.PayloadPushdown = false; }
 		if ( jsongin.ShortType( Settings.Columns ) !== 'a' ) { Settings.Columns = []; }
 
 
@@ -65,6 +76,9 @@ module.exports = {
 		// TEXT until a dialect indexes into the payload - and that pushdown is deliberately the
 		// last item of Wave 1, after all four dialects have landed.
 		const PAYLOAD_TYPE = 'TEXT DEFAULT NULL';
+
+		// The same column for a storage which asked for the payload pushdown. See ensure_schema.
+		const PAYLOAD_TYPE_PUSHDOWN = `TEXT NOT NULL DEFAULT '{}'`;
 
 		// The type a declared column gets when the caller names one without a type.
 		const DEFAULT_COLUMN_TYPE = 'TEXT DEFAULT NULL';
@@ -131,6 +145,11 @@ module.exports = {
 			// where it noted that operand_type_agrees covers all three engines only because it
 			// refuses on the type disagreement rather than on any engine's reading of it.
 			RefusesTypeMismatch: true,
+			// ***The one capability in this profile which no other engine here has.*** A field
+			// with no column of its own can be answered out of the payload, as jsonb containment.
+			// Declaring it is not enough to make it happen: SQL_Query supplies the payload column
+			// only when the caller set PayloadPushdown, and the rendering needs both.
+			PayloadContainment: 'jsonb',
 		};
 
 
@@ -535,7 +554,14 @@ module.exports = {
 			}
 			if ( Storage.Settings.PayloadColumn && !Storage.Catalog.fields[ Storage.Settings.PayloadColumn ] )
 			{
-				additions.push( { Name: Storage.Settings.PayloadColumn, Type: PAYLOAD_TYPE } );
+				// ***A pushdown storage declares its payload NOT NULL, and the reason is the
+				// index.*** A GIN index cannot answer IS NULL, so a nullable payload forces the
+				// clause to carry an IS NULL disjunct and that disjunct takes the whole clause
+				// off the index - measured on 60,000 rows. The default keeps a row which was
+				// written before this column existed: '{}' is a document with no fields, which is
+				// what such a row actually has in the payload.
+				let payload_type = Storage.Settings.PayloadPushdown ? PAYLOAD_TYPE_PUSHDOWN : PAYLOAD_TYPE;
+				additions.push( { Name: Storage.Settings.PayloadColumn, Type: payload_type } );
 			}
 
 			// Postgres takes a list of ADD COLUMN clauses in one ALTER, the way MySQL does.
@@ -555,6 +581,25 @@ module.exports = {
 			{
 				Storage.Catalog.initialized = false;
 				await update_catalog();
+			}
+
+			// ***The index the payload pushdown needs, and nothing else needs.***
+			//
+			// A GIN index over the parsed payload is what makes containment an index scan rather
+			// than a scan with a cast on every row - measured on PostgreSql 10.21 and 16.15, both
+			// accept the expression index and both use it. It is created only when the caller
+			// asked for the pushdown, because it costs writes and storage on every document and
+			// buys nothing for a storage which never queries a payload field.
+			//
+			// ***The expression has to match the clause exactly*** or the planner will not use
+			// it, which is why both are built from the same column name and the same cast.
+			if ( Storage.Settings.PayloadPushdown && Storage.Settings.PayloadColumn
+				&& Storage.Catalog.fields[ Storage.Settings.PayloadColumn ] )
+			{
+				let index_name = quote_identifier( Storage.Settings.Table + '_' + Storage.Settings.PayloadColumn + '_gin' );
+				await SQL_Execute(
+					`CREATE INDEX IF NOT EXISTS ${index_name} ON ${table_reference()}`
+					+ ` USING GIN ( ( ${quote_identifier( Storage.Settings.PayloadColumn )}::jsonb ) jsonb_path_ops )` );
 			}
 			return;
 		}
@@ -794,6 +839,26 @@ module.exports = {
 				entry.is_projection = payload_sync;
 				sql_expression_options.AllowedFields[ key ] = entry;
 			}
+			// ***The payload is offered to the translator only on request.*** See PayloadPushdown:
+			// the cast throws on a column which is not JSON, so this is the caller's call and not
+			// the dialect's. Without it the translator never sees a payload column and a field
+			// with no column of its own drops out exactly as it always did.
+			if ( Storage.Settings.PayloadPushdown && ( Storage.Catalog.payload_field !== null ) )
+			{
+				sql_expression_options.PayloadContainment = 'jsonb';
+				sql_expression_options.PayloadColumn = Storage.Settings.PayloadColumn;
+				// Read from the catalog rather than assumed from the setting, because a table
+				// this adapter did not create is the case which needs the safe clause.
+				sql_expression_options.PayloadNotNull = ( Storage.Catalog.payload_field.allow_null === false );
+				// ***Every column the table has, not just the ones the clause may filter on.***
+				// A field left out of AllowedFields because this adapter cannot compare its type
+				// still keeps its value in that column, and the payload will not have it. Asking
+				// the payload about it drops the row - measured against a UUID column on a table
+				// this adapter did not write.
+				sql_expression_options.ColumnFields = Object.keys( Storage.Catalog.fields )
+					.filter( function ( Name ) { return Name !== Storage.Settings.PayloadColumn; } );
+			}
+
 			// ***The clause narrows the search; the residual decides the answer.***
 			// Today the residual is the whole criteria, so the filtering below is
 			// unchanged - but reading it from the translation rather than closing over

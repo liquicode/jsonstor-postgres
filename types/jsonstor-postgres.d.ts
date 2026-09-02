@@ -51,6 +51,8 @@ declare module '@liquicode/jsonstor-postgres'
 		PayloadColumn?: string;
 		/** Store the whole document in the payload, making the other columns an index over it. When `false` the payload holds only the fields which have no column. Defaults to `false`. */
 		PayloadSync?: boolean;
+		/** Let a criteria on a field with no column of its own be answered from the payload, and create a `GIN` index to answer it with. Requires the payload column to hold JSON. See the notes. Defaults to `false`. */
+		PayloadPushdown?: boolean;
 		/** Columns to create, as `{ Name, Type, Key }`. Used only when this adapter creates the table; afterwards the table itself is the authority. Defaults to `[]`. */
 		Columns?: ColumnDefinition[];
 	}

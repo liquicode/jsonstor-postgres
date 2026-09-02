@@ -47,6 +47,7 @@ let storage = jsonstor.GetStorage( 'jsonstor-postgres', {
 	ModifySchema: false,
 	PayloadColumn: "",
 	PayloadSync: false,
+	PayloadPushdown: false,
 	Columns: [],
 } );
 ```
@@ -90,6 +91,7 @@ Settings
 | `ModifySchema` | No | `false` | Allow the adapter to create the schema, the table, and the columns it is told to create. It never adds a column because a document had a field. |
 | `PayloadColumn` | No | `""` | The column which stores the document as JSON text. Empty means none, and then every field must already be a column. Created when missing if `ModifySchema` is `true`. |
 | `PayloadSync` | No | `false` | Store the whole document in the payload, making the other columns an index over it. When `false` the payload holds only the fields which have no column. |
+| `PayloadPushdown` | No | `false` | Let a criteria on a field with no column of its own be answered from the payload, and create a `GIN` index to answer it with. Requires the payload column to hold JSON. See the notes. |
 | `Columns` | No | `[]` | Columns to create, as `{ Name, Type, Key }`. Used only when this adapter creates the table; afterwards the table itself is the authority. |
 
 Peculiarities
@@ -101,6 +103,10 @@ Peculiarities
   - ***`PayloadColumn` with `PayloadSync: false`.*** The columns hold the fields they have, and the payload holds everything else. Nothing is duplicated, and a column another application writes stays visible to jsonstor.
   - ***`PayloadColumn` with `PayloadSync: true`.*** The payload holds the whole document and the columns become an index over it. ***This is the only configuration which answers every question the other adapters answer***, because the payload is real JSON: an absent field stays apart from one holding null, a number does not come back a string, and an object keeps its field order.
 - ***A column which mirrors the payload is filtered on, then checked again.*** Under `PayloadSync: true` a value which does not fit its column is stored as `NULL` there and kept in the payload, so every condition on such a column is widened to admit `NULL` and `jsongin` decides the row from the payload. The clause narrows the search; it never narrows the answer.
+- ***`PayloadPushdown: true` lets the `WHERE` clause reach a field which has no column.*** Every other SQL adapter here can only filter on real columns, so a criteria on a payload-only field brings back every row and `jsongin` sorts them out. PostgreSql can do better: the clause casts the payload to `jsonb` and asks a containment question, and a `GIN` index answers it. Measured on a 60,000 row table, a scalar equality goes from a 46ms sequential scan to a 5ms index scan.
+- ***It is off by default because it cannot be turned on safely for every table.*** The clause casts your payload column to `jsonb`, and ***a value which is not JSON makes the statement fail*** rather than return a wrong answer. If jsonstor created the table then the payload is always JSON; if you pointed it at a table you already had, only you know. Turning it on with `ModifySchema: true` also creates the index, which costs write time and disk on every document.
+- ***Only a scalar equality is pushed down***, at any depth: `{ tag: "x" }`, `{ "name.first": "Ada" }`, and the same predicates written with `$eq`. A range comparison, a `null` operand, an array operand, and a numeric path segment such as `{ "tags.0": "x" }` are all left out, because each was measured to disagree with `jsongin` in the direction which loses rows. Leaving them out costs a broader search and never a wrong answer.
+- ***A payload column jsonstor creates for a pushdown storage is `NOT NULL`.*** A `GIN` index cannot answer `IS NULL`, so a nullable payload forces the clause to carry a disjunct which takes the whole thing off the index. Against a table whose payload column is already nullable the clause is still correct - it just scans.
 - ***PostgreSql is strict where the other SQL adapters are forgiving, and that shows up twice.*** It refuses a value which does not match its column rather than converting it, and it refuses a comparison whose operand is not the column's type rather than coercing one side. Both are handled and neither costs you an answer: ***a value which does not fit its column is stored as `NULL` there and kept in the payload***, and ***a condition whose operand disagrees with the column is left out of the clause*** and decided by `jsongin` instead. The only cost is that such a query reads more rows.
 - ***A fractional number does not fit an integer column***, and this is the case worth knowing about because SQL would otherwise round it silently. `3.14` written to an `INTEGER` column would be stored as `3` and a later search for `3.14` would not find the row. It is stored as `NULL` in the column and kept exactly in the payload, so the search finds it. The same applies to a number too large for its column and a string longer than its `VARCHAR`.
 - ***The payload column is `TEXT` rather than `JSONB`.*** `JSONB` stores a parsed form and returns its own key order, so a query comparing a whole object would be comparing a document you did not write. `TEXT` returns the bytes which were stored. This costs the ability to index into the payload, which is a trade this adapter has not taken yet.
