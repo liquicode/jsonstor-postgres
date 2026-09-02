@@ -22,8 +22,10 @@ export default ADAPTER;
 
 
 //---------------------------------------------------------------------
-// The adapter's three members.
+// The adapter's members, including the family it registers.
 
 export const AdapterName = ADAPTER.AdapterName;
 export const AdapterDescription = ADAPTER.AdapterDescription;
 export const GetAdapter = ADAPTER.GetAdapter;
+export const Adapters = ADAPTER.Adapters;
+export const Aliases = ADAPTER.Aliases;
