@@ -210,33 +210,57 @@ module.exports = {
 		//=====================================================================
 		// WithClient
 		//
-		// ***One connection per statement, which is the sibling MySQL adapter's pattern and not
-		// the SQLite one.*** jsonstor-sqlite holds a single connection for the life of the
-		// storage because with ':memory:' the database *is* the connection and closing it
-		// discards everything stored. No such constraint applies to a server.
+		// ***One pool for the life of the storage, which the driver lets the process walk away
+		// from.***
 		//
-		// The reason to prefer it here is that nothing would ever close a held connection. The
-		// Storage interface has no Close, so a pg Pool or a long lived Client would keep an
-		// open handle in the event loop and the process would not exit - a test run would hang
-		// after the last assertion passed. A client which is ended in a finally block cannot do
-		// that.
+		// This used to open a Client per statement, on the grounds that nothing would ever close
+		// a held one: the Storage interface has no Close, so an open handle would sit in the
+		// event loop and a finished test run would hang. ***The premise is right and the
+		// conclusion is not***, because pg answers it directly - `allowExitOnIdle` unrefs a
+		// pooled client the moment it goes idle, so the pool keeps its connections warm and
+		// stops holding the process up. Measured: a process which leaves this pool open exits
+		// in 66ms.
+		//
+		// ***The cost of the old pattern was a connect, an authentication and a teardown on
+		// every statement.*** Against the live server, twenty statements cost 316ms opening a
+		// client each time and 21ms on a held pool.
+		//
+		// ***A pool of its own rather than the module's global one***, so two storages pointed
+		// at different servers in one process cannot share a connection - which is exactly what
+		// a conformance run would do.
+		//
+		// ***Nothing here remembers a failure, and nothing needs to.*** A pool is not a memoized
+		// connection: constructing one opens nothing, and a server which did not answer makes
+		// `connect()` reject while leaving the pool willing to try again. That is the property
+		// jsonstor-oracle and jsonstor-mssql have to write by hand, because they memoize a
+		// promise; here the driver already has it.
+		let connection_pool = null;
 		async function WithClient( Handler /* ( Client ) */ )
 		{
-			let client = new POSTGRES.Client( {
-				host: Storage.Settings.Server,
-				port: Storage.Settings.Port,
-				database: Storage.Settings.Database,
-				user: Storage.Settings.UserName,
-				password: Storage.Settings.Password,
-			} );
-			await client.connect();
+			if ( connection_pool === null )
+			{
+				connection_pool = new POSTGRES.Pool( {
+					host: Storage.Settings.Server,
+					port: Storage.Settings.Port,
+					database: Storage.Settings.Database,
+					user: Storage.Settings.UserName,
+					password: Storage.Settings.Password,
+					allowExitOnIdle: true,
+				} );
+				// ***A pool emits 'error' for a client which fails while sitting idle***, and an
+				// unhandled 'error' on an EventEmitter takes the process down. The pool discards
+				// that client either way and the next acquire opens a new one, so there is
+				// nothing to do here but decline to die.
+				connection_pool.on( 'error', function () { return; } );
+			}
+			let client = await connection_pool.connect();
 			try
 			{
 				return await Handler( client );
 			}
 			finally
 			{
-				await client.end();
+				client.release();
 			}
 		}
 
@@ -326,10 +350,43 @@ module.exports = {
 
 
 		//=====================================================================
+		// ***The catalog is marked known only once it has been read.***
+		//
+		// This used to set `initialized` on the way in, which made a failed read
+		// indistinguishable from an empty database: the flag stayed true, `table_exists` stayed
+		// false, and every later call served that back as a fact. A Count against a server which
+		// was not answering returned ***0*** rather than failing - the first call threw and every
+		// one after it lied, which is the worst shape an error can take here. Setting the flag on
+		// the way out is the whole fix: a read which throws leaves the catalog unknown, and the
+		// next call asks again.
+		//
+		// ***Memoized while it is in flight***, because two concurrent first calls had a quieter
+		// version of the same bug - the second saw the flag the first had just set and carried on
+		// against a catalog which had not been filled in yet.
+		let catalog_read = null;
 		async function update_catalog()
 		{
 			if ( Storage.Catalog.initialized ) { return Storage.Catalog; }
-			Storage.Catalog.initialized = true;
+			if ( catalog_read === null )
+			{
+				catalog_read = read_catalog().then(
+					function ( Catalog )
+					{
+						Storage.Catalog.initialized = true;
+						catalog_read = null;
+						return Catalog;
+					},
+					function ( ReadError )
+					{
+						catalog_read = null;
+						throw ReadError;
+					} );
+			}
+			return await catalog_read;
+		}
+
+		async function read_catalog()
+		{
 			Storage.Catalog.table_exists = false;
 			Storage.Catalog.fields = {};
 			Storage.Catalog.id_field = Storage.Settings.IdField;
