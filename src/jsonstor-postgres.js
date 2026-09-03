@@ -31,6 +31,18 @@ module.exports = {
 		if ( jsongin.ShortType( Settings.Schema ) !== 's' ) { Settings.Schema = 'public'; }
 		if ( jsongin.ShortType( Settings.IdField ) !== 's' ) { Settings.IdField = ''; }
 		if ( jsongin.ShortType( Settings.ModifySchema ) !== 'b' ) { Settings.ModifySchema = false; }
+		// ***The two names are the family's, not this driver's.*** `jsonstor-mssql` named these
+		// first because node-mssql forced the question, and the same pair is spelled the same way
+		// wherever a driver can carry it. `pg` takes an `ssl` option rather than two booleans, so
+		// they are mapped at the pool below.
+		//
+		// ***Both defaults suit a local server and neither suits a hosted one.*** Every server
+		// this family tests against is plaintext, so `Encrypt` is off; and a container presents a
+		// certificate no machine trusts, so `TrustServerCertificate` is on. ***A hosted Postgres
+		// wants the opposite pair*** - Supabase, Neon and RDS all require encryption and all
+		// present a certificate that a real CA signed.
+		if ( jsongin.ShortType( Settings.Encrypt ) !== 'b' ) { Settings.Encrypt = false; }
+		if ( jsongin.ShortType( Settings.TrustServerCertificate ) !== 'b' ) { Settings.TrustServerCertificate = true; }
 		// The storage model. See jsonx/.plans/sql-adapter-architecture.md - real columns are an
 		// index which pre-filters, and the payload column carries the document. With no payload
 		// column the table *is* the document, and a field with no column is refused by name.
@@ -265,6 +277,13 @@ module.exports = {
 					user: Storage.Settings.UserName,
 					password: Storage.Settings.Password,
 					allowExitOnIdle: true,
+					// ***Two booleans onto one option, and `false` rather than absent.*** pg reads
+					// a missing `ssl` and `ssl: false` the same way, so the plaintext case is
+					// stated rather than implied. `rejectUnauthorized` is the inverse of trusting
+					// the certificate, which is why the setting is not passed straight through.
+					ssl: Storage.Settings.Encrypt
+						? { rejectUnauthorized: !Storage.Settings.TrustServerCertificate }
+						: false,
 				} );
 				// ***A pool emits 'error' for a client which fails while sitting idle***, and an
 				// unhandled 'error' on an EventEmitter takes the process down. The pool discards

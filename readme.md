@@ -45,6 +45,8 @@ let storage = jsonstor.GetStorage( 'jsonstor-postgres', {
 	UserName: '...',
 	Password: '...',
 	ModifySchema: false,
+	Encrypt: false,
+	TrustServerCertificate: true,
 	PayloadColumn: "",
 	PayloadSync: false,
 	PayloadPushdown: false,
@@ -89,6 +91,8 @@ Settings
 | `UserName` | ***Yes*** | - | The user to connect as. |
 | `Password` | ***Yes*** | - | That user's password. Pass an empty string for none - the setting itself is required. |
 | `ModifySchema` | No | `false` | Allow the adapter to create the schema, the table, and the columns it is told to create. It never adds a column because a document had a field. |
+| `Encrypt` | No | `false` | Encrypt the connection with TLS. Off by default so that a local server connects; a hosted PostgreSql such as Supabase or Neon requires it on. |
+| `TrustServerCertificate` | No | `true` | Accept a certificate the machine does not trust, which is what a local server presents. Turn this off wherever `Encrypt` is on and the certificate is a real one. |
 | `PayloadColumn` | No | `""` | The column which stores the document as JSON text. Empty means none, and then every field must already be a column. Created when missing if `ModifySchema` is `true`. |
 | `PayloadSync` | No | `false` | Store the whole document in the payload, making the other columns an index over it. When `false` the payload holds only the fields which have no column. |
 | `PayloadPushdown` | No | `false` | Let a criteria on a field with no column of its own be answered from the payload, and create a `GIN` index to answer it with. Requires the payload column to hold JSON. See the notes. |

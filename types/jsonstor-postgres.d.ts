@@ -47,6 +47,10 @@ declare module '@liquicode/jsonstor-postgres'
 		Password: string;
 		/** Allow the adapter to create the schema, the table, and the columns it is told to create. It never adds a column because a document had a field. Defaults to `false`. */
 		ModifySchema?: boolean;
+		/** Encrypt the connection with TLS. Off by default so that a local server connects; a hosted PostgreSql such as Supabase or Neon requires it on. Defaults to `false`. */
+		Encrypt?: boolean;
+		/** Accept a certificate the machine does not trust, which is what a local server presents. Turn this off wherever `Encrypt` is on and the certificate is a real one. Defaults to `true`. */
+		TrustServerCertificate?: boolean;
 		/** The column which stores the document as JSON text. Empty means none, and then every field must already be a column. Created when missing if `ModifySchema` is `true`. Defaults to `""`. */
 		PayloadColumn?: string;
 		/** Store the whole document in the payload, making the other columns an index over it. When `false` the payload holds only the fields which have no column. Defaults to `false`. */
