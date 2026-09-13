@@ -41,7 +41,7 @@ declare module '@liquicode/jsonstor-postgres'
 		Table: string;
 		/** The column to treat as the document identifier. Empty discovers it from the table: a column named `_id`, then an auto-increment key. `IdField` is the former spelling and still works. Defaults to `""`. */
 		PrimaryKey?: string;
-		/** Allow an update or a replacement to change the identifier. Off by default, so an operation which would move it is refused by name rather than silently discarded. Defaults to `false`. */
+		/** Allow an update or replacement to change the identifier. When `false`, such an operation is refused. Defaults to `false`. */
 		PrimaryKeyMutable?: boolean;
 		/** The user to connect as. */
 		UserName: string;
@@ -49,13 +49,13 @@ declare module '@liquicode/jsonstor-postgres'
 		Password: string;
 		/** Allow the adapter to create the schema, the table, and the columns it is told to create. It never adds a column because a document had a field. Defaults to `false`. */
 		ModifySchema?: boolean;
-		/** Encrypt the connection with TLS. Off by default so that a local server connects; a hosted PostgreSql such as Supabase or Neon requires it on. Defaults to `false`. */
+		/** Encrypt the connection with TLS. Off by default, for a local server; a server which requires TLS needs it on. Defaults to `false`. */
 		Encrypt?: boolean;
 		/** Accept a certificate the machine does not trust, which is what a local server presents. Turn this off wherever `Encrypt` is on and the certificate is a real one. Defaults to `true`. */
 		TrustServerCertificate?: boolean;
-		/** The column which stores the document as JSON text. Empty means none, and then every field must already be a column. Created when missing if `ModifySchema` is `true`. Defaults to `""`. */
+		/** The column which stores the document as JSON text. Empty means none, and every field must have a column. Created if missing when `ModifySchema` is `true`. Defaults to `""`. */
 		PayloadColumn?: string;
-		/** Store the whole document in the payload, making the other columns an index over it. When `false` the payload holds only the fields which have no column. Defaults to `false`. */
+		/** Store the whole document in the payload, and copy fields into their columns for filtering. When `false`, the payload holds only fields without a column. Defaults to `false`. */
 		PayloadSync?: boolean;
 		/** Let a criteria on a field with no column of its own be answered from the payload, and create a `GIN` index to answer it with. Requires the payload column to hold JSON. See the notes. Defaults to `false`. */
 		PayloadPushdown?: boolean;
